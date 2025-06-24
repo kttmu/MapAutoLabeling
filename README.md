@@ -41,6 +41,7 @@ pip install flask flask-cors openai requests
 
 ### 2. Groq APIキーの設定
 このアプリケーションはgroqを利用しています。公式サイトにログインし、APIキーを生成してください。生成された鍵をgroq_api_key.txtに入力してください。
+https://console.groq.com/home
 
 ### 3. Flaskサーバーの起動
 groqの推論処理及び、データの加工のバックグラウンド処理をpythonで実装しています。```requirement.txt```をpipでインストールの上、以下コマンドを実行ください。
