@@ -12,7 +12,7 @@ CORS(app)
 
 # Groq API設定（外部ファイルからキー読み込み）
 openai.api_key = ""
-with open("groq_api_key.txt", "r", encoding="utf-8") as f:
+with open("../groq_api_key.txt", "r", encoding="utf-8") as f:
     openai.api_key = f.read().strip()
 
 openai.api_base = "https://api.groq.com/openai/v1"
