@@ -1,4 +1,4 @@
-# 🗺️ Map Labeling Tool with Auto Labeling
+# 🗺️ Map Labeling Tool with groq api
 
 このツールは、CSVで与えられた緯度経度情報に対してOpenStreetMapとLLM（Groq + LLaMA3）を活用し、自動的に地理的特徴（例：都市部・交差点・橋・高速道路など）をラベル付けし、インタラクティブなマップ上に可視化するWebアプリケーションです。
 
