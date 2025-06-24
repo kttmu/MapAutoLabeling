@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Map Labeling Tool with Auto Labeling</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; }
+    #map { flex: 1; }
+    #sidebar {
+      width: 320px;
+      padding: 10px;
+      background: #f9f9f9;
+      border-right: 1px solid #ccc;
+      overflow-y: auto;
+    }
+    input, button {
+      width: 100%;
+      margin-top: 5px;
+    }
+    .marker-label {
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>Map Labeling Tool</h2>
+    <input type="file" id="csvInput" accept=".csv">
+    <button onclick="autoLabel()">Auto Labeling (Groq)</button>
+    <button onclick="exportCSV()">Export CSV</button>
+    <input type="text" id="searchInput" placeholder="ラベルで検索（例: Urban）">
+
+    <div id="loadingOverlay" style="display:none; text-align:center; margin-top:10px;">
+      <div>ラベリング中... ⏳</div>
+    </div>
+
+    <div id="markerList"></div>
+  </div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script>
+    const map = L.map('map').setView([35.6812, 139.7671], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let markerData = [];
+
+    document.getElementById('csvInput').addEventListener('change', function (e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: function (results) {
+          results.data.forEach((row, idx) => {
+            const id = row.id || idx + 1;
+            const lat = parseFloat(row.latitude);
+            const lng = parseFloat(row.longitude);
+            const labels = row.label ? row.label.split(';').map(l => l.trim()) : [];
+            addMarker(id, lat, lng, labels);
+          });
+        }
+      });
+    });
+
+    function getColorByLabel(labels) {
+      if (labels.includes("Urban area")) return "blue";
+      if (labels.includes("Intersection")) return "orange";
+      if (labels.includes("Bridge")) return "green";
+      if (labels.includes("Highway")) return "red";
+      return "gray";
+    }
+
+    function addMarker(id, lat, lng, labels) {
+      const color = getColorByLabel(labels);
+      const marker = L.circleMarker([lat, lng], {
+        radius: 8,
+        color: color,
+        fillColor: color,
+        fillOpacity: 0.8
+      }).addTo(map);
+      marker.bindPopup(getPopupContent(id, lat, lng, labels));
+
+      // 左クリックでストリートビューを開く
+      marker.on('dblclick', () => {
+        const streetViewURL = `https://www.google.com/maps?q=&layer=c&cbll=${lat},${lng}`;
+        window.open(streetViewURL, '_blank');
+      });
+
+      markerData.push({ id, lat, lng, labels, marker });
+      updateMarkerList();
+
+    }
+
+    function getPopupContent(id, lat, lng, labels) {
+      return `
+        <div>
+          <div class="marker-label">ID: ${id}</div>
+          <div>Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}</div>
+          <div>Labels: ${labels.join('; ')}</div>
+        </div>
+      `;
+
+    }
+    function getPopupContent(id, lat, lng, labels) {
+
+      const labelText = Array.isArray(labels) ? labels.join('; ') : String(labels);
+      return `
+        <div>
+          <div class="marker-label">ID: ${id}</div>
+          <div>Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}</div>
+          <div>Labels: ${labelText}</div>
+        </div>
+      `;
+
+    }
+
+    function updateMarkerList() {
+      const container = document.getElementById('markerList');
+      const searchTerm = document.getElementById('searchInput')?.value?.toLowerCase() || '';
+      container.innerHTML = '';
+    
+      markerData.forEach(d => {
+        const labelText = Array.isArray(d.labels) ? d.labels.join(', ') : '';
+        const matchesSearch = labelText.toLowerCase().includes(searchTerm);
+        if (!searchTerm || matchesSearch) {
+          const item = document.createElement('div');
+          item.innerHTML = `<strong>${labelText || '(No Label)'}</strong><br>[${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}]`;
+          item.style.cursor = 'pointer';
+          item.style.marginBottom = '8px';
+          item.onclick = () => {
+            map.setView([d.lat, d.lng], 12);
+            d.marker.openPopup();
+          };
+          container.appendChild(item);
+        }
+      });
+    }
+    
+    document.getElementById('searchInput')?.addEventListener('input', updateMarkerList);
+
+    async function autoLabel() {
+      if (markerData.length === 0) return;
+    
+      document.getElementById('loadingOverlay').style.display = 'block';
+    
+      const CHUNK_SIZE = 100;
+      const chunks = [];
+      for (let i = 0; i < markerData.length; i += CHUNK_SIZE) {
+        chunks.push(markerData.slice(i, i + CHUNK_SIZE));
+      }
+    
+      for (const chunk of chunks) {
+        const response = await fetch("http://localhost:5000/autolabel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(chunk.map(d => ({ lat: d.lat, lng: d.lng })))
+        });
+    
+        const labelsList = await response.json();
+    
+        chunk.forEach((d, i) => {
+          d.labels = labelsList[i].labels;
+          d.marker.setPopupContent(getPopupContent(d.id, d.lat, d.lng, d.labels));
+          const newColor = getColorByLabel(d.labels);
+          d.marker.setStyle({ color: newColor, fillColor: newColor });
+        });
+      }
+    
+      updateMarkerList();
+      document.getElementById('loadingOverlay').style.display = 'none';
+    }
+
+    function exportCSV() {
+      const csv = Papa.unparse(markerData.map(d => ({
+        id: d.id,
+        latitude: d.lat,
+        longitude: d.lng,
+        label: d.labels.join(';')
+      })));
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", "labeled_points.csv");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  </script>
+</body>
+</html>
