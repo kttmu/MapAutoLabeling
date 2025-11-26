@@ -1,54 +1,243 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
   <meta charset="UTF-8">
-  <title>Map Labeling Tool with Auto Labeling</title>
+  <title>Map Labeling Tool</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    body { font-family: sans-serif; margin: 0; display: flex; height: 100vh; }
-    #map { flex: 1; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      display: flex;
+      height: 100vh;
+      color: #333;
+    }
+
     #sidebar {
-      width: 320px;
-      padding: 10px;
-      background: #f9f9f9;
-      border-right: 1px solid #ccc;
+      width: 350px;
+      background: #f4f4f4;
+      border-right: 1px solid #ddd;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+    }
+
+    .sidebar-content {
+      padding: 15px;
       overflow-y: auto;
+      flex: 1;
     }
-    input, button {
+
+    h2,
+    h3 {
+      margin-top: 0;
+      color: #2c3e50;
+    }
+
+    h3 {
+      font-size: 1.1em;
+      margin-top: 20px;
+      border-bottom: 2px solid #ddd;
+      padding-bottom: 5px;
+    }
+
+    .control-group {
+      margin-bottom: 15px;
+      background: #fff;
+      padding: 10px;
+      border-radius: 5px;
+      border: 1px solid #ddd;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select {
       width: 100%;
-      margin-top: 5px;
+      padding: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
     }
-    .marker-label {
+
+    button {
+      width: 100%;
+      padding: 10px;
+      background-color: #3498db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
       font-weight: bold;
+      margin-bottom: 5px;
+      transition: background-color 0.2s;
+    }
+
+    button:hover {
+      background-color: #2980b9;
+    }
+
+    button.secondary {
+      background-color: #95a5a6;
+    }
+
+    button.secondary:hover {
+      background-color: #7f8c8d;
+    }
+
+    button.danger {
+      background-color: #e74c3c;
+    }
+
+    button.danger:hover {
+      background-color: #c0392b;
+    }
+
+    #map {
+      flex: 1;
+    }
+
+    #markerList {
+      margin-top: 10px;
+    }
+
+    .marker-item {
+      padding: 8px;
+      border-bottom: 1px solid #eee;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .marker-item:hover {
+      background-color: #e8f6ff;
+    }
+
+    .marker-item strong {
+      color: #2980b9;
+    }
+
+    #loadingOverlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.8);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+      font-size: 1.5em;
+      color: #333;
+    }
+
+    .rule-item {
+      background: #eee;
+      padding: 5px;
+      margin-bottom: 5px;
+      border-radius: 3px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.9em;
+    }
+
+    .rule-item button {
+      width: auto;
+      padding: 2px 6px;
+      margin: 0;
+      font-size: 0.8em;
     }
   </style>
 </head>
+
 <body>
+
   <div id="sidebar">
-    <h2>Map Labeling Tool</h2>
-    <input type="file" id="csvInput" accept=".csv">
-    <button onclick="autoLabel()">Auto Labeling (Groq)</button>
-    <button onclick="exportCSV()">Export CSV</button>
-    <input type="text" id="searchInput" placeholder="ラベルで検索（例: Urban）">
+    <div class="sidebar-content">
+      <h2>Map Labeling Tool</h2>
 
-    <div id="loadingOverlay" style="display:none; text-align:center; margin-top:10px;">
-      <div>ラベリング中... ⏳</div>
+      <div class="control-group">
+        <label>Data Source</label>
+        <input type="file" id="csvInput" accept=".csv">
+        <button class="secondary" onclick="loadTestData()">Load Test Data (Demo)</button>
+      </div>
+
+      <div class="control-group">
+        <label>Actions</label>
+        <button onclick="autoLabel()">Auto Labeling (Groq)</button>
+        <button class="secondary" onclick="exportCSV()">Export CSV</button>
+      </div>
+
+      <h3>Data Thinning</h3>
+      <div class="control-group">
+        <label>Min Distance (m)</label>
+        <input type="number" id="thinDistance" value="0" min="0">
+        <label>Sampling Rate (1/N)</label>
+        <input type="number" id="thinRate" value="1" min="1">
+        <button onclick="applyThinning()">Apply Thinning</button>
+        <div id="thinningStatus" style="font-size: 0.85em; color: #666; margin-top: 5px; text-align: center;"></div>
+      </div>
+
+      <h3>Custom Rules</h3>
+      <div class="control-group">
+        <select id="ruleColumn">
+          <option value="">Select Column</option>
+        </select>
+        <div style="display: flex; gap: 5px;">
+          <select id="ruleOperator" style="flex: 1;">
+            <option value=">">&gt;</option>
+            <option value="<">&lt;</option>
+            <option value="==">==</option>
+            <option value="contains">contains</option>
+          </select>
+          <input type="text" id="ruleValue" placeholder="Value" style="flex: 1;">
+        </div>
+        <input type="text" id="ruleLabel" placeholder="Label to add">
+        <button onclick="addRule()">Add Rule</button>
+
+        <div id="ruleListContainer" style="margin-top: 10px;">
+          <ul id="ruleList" style="list-style: none; padding: 0;"></ul>
+        </div>
+        <button onclick="applyRules()">Apply Rules</button>
+      </div>
+
+      <h3>Markers</h3>
+      <input type="text" id="searchInput" placeholder="Search labels...">
+      <div id="markerList"></div>
     </div>
-
-    <div id="markerList"></div>
   </div>
+
   <div id="map"></div>
+
+  <div id="loadingOverlay">
+    <div>Processing... ⏳</div>
+  </div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <script>
-    const map = L.map('map').setView([35.6812, 139.7671], 5);
+    // --- Map Initialization ---
+    const map = L.map('map').setView([35.6812, 139.7671], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
+    // --- State ---
+    let originalData = [];
     let markerData = [];
+    let rules = [];
+    let csvHeaders = [];
 
+    // --- Event Listeners ---
     document.getElementById('csvInput').addEventListener('change', function (e) {
       const file = e.target.files[0];
       if (!file) return;
@@ -56,132 +245,308 @@
         header: true,
         skipEmptyLines: true,
         complete: function (results) {
-          results.data.forEach((row, idx) => {
-            const id = row.id || idx + 1;
-            const lat = parseFloat(row.latitude);
-            const lng = parseFloat(row.longitude);
-            const labels = row.label ? row.label.split(';').map(l => l.trim()) : [];
-            addMarker(id, lat, lng, labels);
-          });
+          processData(results);
         }
       });
     });
 
+    document.getElementById('searchInput').addEventListener('input', updateMarkerList);
+
+    // --- Data Loading ---
+    function loadTestData() {
+      const csv = `id,latitude,longitude,speed,rpm
+1,35.681236,139.767125,40,2000
+2,35.682236,139.768125,65,3000
+3,35.683236,139.769125,55,2500
+4,35.684236,139.770125,70,3500
+5,35.685236,139.771125,30,1500
+6,35.686236,139.772125,80,4000
+7,35.687236,139.773125,45,2200
+8,35.688236,139.774125,60,2800
+9,35.689236,139.775125,20,1000
+10,35.690236,139.776125,90,4500`;
+
+      Papa.parse(csv, {
+        header: true,
+        skipEmptyLines: true,
+        complete: function (results) {
+          processData(results);
+        }
+      });
+    }
+
+    function processData(results) {
+      csvHeaders = results.meta.fields || [];
+      updateColumnSelect();
+
+      originalData = results.data.map((row, idx) => {
+        const id = row.id || idx + 1;
+        const lat = parseFloat(row.latitude);
+        const lng = parseFloat(row.longitude);
+        const labels = row.label ? row.label.split(';').map(l => l.trim()).filter(l => l) : [];
+        return { ...row, id, lat, lng, labels, originalRow: row };
+      }).filter(d => !isNaN(d.lat) && !isNaN(d.lng));
+
+      if (originalData.length > 0) {
+        map.setView([originalData[0].lat, originalData[0].lng], 13);
+      }
+
+      applyThinning();
+    }
+
+    function updateColumnSelect() {
+      const select = document.getElementById('ruleColumn');
+      select.innerHTML = '<option value="">Select Column</option>';
+      csvHeaders.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.textContent = h;
+        select.appendChild(opt);
+      });
+    }
+
+    // --- Thinning Logic ---
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371e3; // metres
+      const φ1 = lat1 * Math.PI / 180;
+      const φ2 = lat2 * Math.PI / 180;
+      const Δφ = (lat2 - lat1) * Math.PI / 180;
+      const Δλ = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+        Math.cos(φ1) * Math.cos(φ2) *
+        Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function applyThinning() {
+      const distThresh = parseFloat(document.getElementById('thinDistance').value) || 0;
+      const rate = parseInt(document.getElementById('thinRate').value) || 1;
+
+      // Clear existing
+      markerData.forEach(d => {
+        if (d.marker) map.removeLayer(d.marker);
+      });
+      markerData = [];
+
+      let lastPoint = null;
+      const thinned = [];
+
+      originalData.forEach((d, i) => {
+        if ((i % rate) !== 0) return;
+
+        if (distThresh > 0 && lastPoint) {
+          const dist = haversine(lastPoint.lat, lastPoint.lng, d.lat, d.lng);
+          if (dist < distThresh) return;
+        }
+
+        thinned.push(d);
+        lastPoint = d;
+      });
+
+      thinned.forEach(d => addMarker(d));
+
+      document.getElementById('thinningStatus').innerText =
+        `Showing ${thinned.length} / ${originalData.length} points`;
+    }
+
+    // --- Marker Logic ---
     function getColorByLabel(labels) {
       if (labels.includes("Urban area")) return "blue";
       if (labels.includes("Intersection")) return "orange";
       if (labels.includes("Bridge")) return "green";
-      if (labels.includes("Highway")) return "red";
-      return "gray";
+      if (labels.includes("Highway") || labels.includes("Fast")) return "red";
+      return "#3388ff"; // Default Leaflet blue-ish
     }
 
-    function addMarker(id, lat, lng, labels) {
-      const color = getColorByLabel(labels);
-      const marker = L.circleMarker([lat, lng], {
+    function addMarker(data) {
+      const color = getColorByLabel(data.labels);
+      const marker = L.circleMarker([data.lat, data.lng], {
         radius: 8,
         color: color,
         fillColor: color,
-        fillOpacity: 0.8
+        fillOpacity: 0.6,
+        weight: 1
       }).addTo(map);
-      marker.bindPopup(getPopupContent(id, lat, lng, labels));
 
-      // 左クリックでストリートビューを開く
+      data.marker = marker;
+      marker.bindPopup(getPopupContent(data));
+
       marker.on('dblclick', () => {
-        const streetViewURL = `https://www.google.com/maps?q=&layer=c&cbll=${lat},${lng}`;
+        const streetViewURL = `https://www.google.com/maps?q=&layer=c&cbll=${data.lat},${data.lng}`;
         window.open(streetViewURL, '_blank');
       });
 
-      markerData.push({ id, lat, lng, labels, marker });
+      markerData.push(data);
       updateMarkerList();
-
     }
 
-    function getPopupContent(id, lat, lng, labels) {
+    function getPopupContent(d) {
+      let extraInfo = '';
+      for (const [key, val] of Object.entries(d.originalRow)) {
+        if (!['latitude', 'longitude', 'id', 'label'].includes(key)) {
+          extraInfo += `<div><strong>${key}:</strong> ${val}</div>`;
+        }
+      }
+
       return `
-        <div>
-          <div class="marker-label">ID: ${id}</div>
-          <div>Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}</div>
-          <div>Labels: ${labels.join('; ')}</div>
-        </div>
-      `;
-
-    }
-    function getPopupContent(id, lat, lng, labels) {
-
-      const labelText = Array.isArray(labels) ? labels.join('; ') : String(labels);
-      return `
-        <div>
-          <div class="marker-label">ID: ${id}</div>
-          <div>Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)}</div>
-          <div>Labels: ${labelText}</div>
-        </div>
-      `;
-
+      <div style="font-size:1.1em;">
+        <div><strong>ID:</strong> ${d.id}</div>
+        <div><strong>Lat/Lng:</strong> ${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}</div>
+        <div style="margin:5px 0;"><strong>Labels:</strong> ${d.labels.length ? d.labels.join(', ') : 'None'}</div>
+        <hr style="margin:5px 0; border:0; border-top:1px solid #ccc;">
+        ${extraInfo}
+      </div>
+    `;
     }
 
     function updateMarkerList() {
       const container = document.getElementById('markerList');
-      const searchTerm = document.getElementById('searchInput')?.value?.toLowerCase() || '';
+      const searchTerm = document.getElementById('searchInput').value.toLowerCase();
       container.innerHTML = '';
-    
-      markerData.forEach(d => {
-        const labelText = Array.isArray(d.labels) ? d.labels.join(', ') : '';
-        const matchesSearch = labelText.toLowerCase().includes(searchTerm);
+
+      // Limit display to first 100 to avoid freezing UI
+      let count = 0;
+      for (const d of markerData) {
+        if (count > 100) break;
+
+        const labelText = d.labels.join(', ');
+        const matchesSearch = labelText.toLowerCase().includes(searchTerm) ||
+          String(d.id).includes(searchTerm);
+
         if (!searchTerm || matchesSearch) {
           const item = document.createElement('div');
-          item.innerHTML = `<strong>${labelText || '(No Label)'}</strong><br>[${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}]`;
-          item.style.cursor = 'pointer';
-          item.style.marginBottom = '8px';
+          item.className = 'marker-item';
+          item.innerHTML = `
+          <strong>ID ${d.id}</strong> <span style="font-size:0.9em; color:#666;">[${d.labels.join(', ')}]</span><br>
+          <small>${d.lat.toFixed(4)}, ${d.lng.toFixed(4)}</small>
+        `;
           item.onclick = () => {
-            map.setView([d.lat, d.lng], 12);
+            map.setView([d.lat, d.lng], 15);
             d.marker.openPopup();
           };
           container.appendChild(item);
+          count++;
         }
+      }
+    }
+
+    // --- Rules Logic ---
+    function addRule() {
+      const col = document.getElementById('ruleColumn').value;
+      const op = document.getElementById('ruleOperator').value;
+      const val = document.getElementById('ruleValue').value;
+      const lbl = document.getElementById('ruleLabel').value;
+
+      if (!col || !val || !lbl) {
+        alert("Please fill all rule fields");
+        return;
+      }
+
+      rules.push({ col, op, val, lbl });
+      renderRules();
+    }
+
+    function renderRules() {
+      const list = document.getElementById('ruleList');
+      list.innerHTML = '';
+      rules.forEach((r, i) => {
+        const li = document.createElement('li');
+        li.className = 'rule-item';
+        li.innerHTML = `
+        <span>${r.col} ${r.op} ${r.val} &rArr; <b>${r.lbl}</b></span>
+        <button class="danger" onclick="removeRule(${i})">x</button>
+      `;
+        list.appendChild(li);
       });
     }
-    
-    document.getElementById('searchInput')?.addEventListener('input', updateMarkerList);
 
+    function removeRule(index) {
+      rules.splice(index, 1);
+      renderRules();
+    }
+
+    function applyRules() {
+      markerData.forEach(d => {
+        rules.forEach(r => {
+          const val = d.originalRow[r.col];
+          let match = false;
+
+          const numVal = parseFloat(val);
+          const numRuleVal = parseFloat(r.val);
+          const isNum = !isNaN(numVal) && !isNaN(numRuleVal);
+
+          if (r.op === '>') {
+            match = isNum ? numVal > numRuleVal : val > r.val;
+          } else if (r.op === '<') {
+            match = isNum ? numVal < numRuleVal : val < r.val;
+          } else if (r.op === '==') {
+            match = isNum ? numVal === numRuleVal : val === r.val;
+          } else if (r.op === 'contains') {
+            match = String(val).includes(r.val);
+          }
+
+          if (match && !d.labels.includes(r.lbl)) {
+            d.labels.push(r.lbl);
+          }
+        });
+
+        // Update visual
+        d.marker.setPopupContent(getPopupContent(d));
+        const newColor = getColorByLabel(d.labels);
+        d.marker.setStyle({ color: newColor, fillColor: newColor });
+      });
+      updateMarkerList();
+    }
+
+    // --- Auto Labeling ---
     async function autoLabel() {
       if (markerData.length === 0) return;
-    
-      document.getElementById('loadingOverlay').style.display = 'block';
-    
-      const CHUNK_SIZE = 100;
+
+      document.getElementById('loadingOverlay').style.display = 'flex';
+
+      const CHUNK_SIZE = 50; // Smaller chunk size for safety
       const chunks = [];
       for (let i = 0; i < markerData.length; i += CHUNK_SIZE) {
         chunks.push(markerData.slice(i, i + CHUNK_SIZE));
       }
-    
-      for (const chunk of chunks) {
-        const response = await fetch("http://localhost:5000/autolabel", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(chunk.map(d => ({ lat: d.lat, lng: d.lng })))
-        });
-    
-        const labelsList = await response.json();
-    
-        chunk.forEach((d, i) => {
-          d.labels = labelsList[i].labels;
-          d.marker.setPopupContent(getPopupContent(d.id, d.lat, d.lng, d.labels));
-          const newColor = getColorByLabel(d.labels);
-          d.marker.setStyle({ color: newColor, fillColor: newColor });
-        });
+
+      try {
+        for (const chunk of chunks) {
+          const response = await fetch("http://localhost:5000/autolabel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(chunk.map(d => ({ lat: d.lat, lng: d.lng })))
+          });
+
+          if (!response.ok) throw new Error("API Error");
+
+          const labelsList = await response.json();
+
+          chunk.forEach((d, i) => {
+            if (labelsList[i] && labelsList[i].labels) {
+              d.labels = [...new Set([...d.labels, ...labelsList[i].labels])];
+              d.marker.setPopupContent(getPopupContent(d));
+              const newColor = getColorByLabel(d.labels);
+              d.marker.setStyle({ color: newColor, fillColor: newColor });
+            }
+          });
+        }
+      } catch (e) {
+        alert("Error during auto labeling: " + e.message);
+      } finally {
+        updateMarkerList();
+        document.getElementById('loadingOverlay').style.display = 'none';
       }
-    
-      updateMarkerList();
-      document.getElementById('loadingOverlay').style.display = 'none';
     }
 
+    // --- Export ---
     function exportCSV() {
-      const csv = Papa.unparse(markerData.map(d => ({
-        id: d.id,
-        latitude: d.lat,
-        longitude: d.lng,
-        label: d.labels.join(';')
-      })));
+      const csv = Papa.unparse(markerData.map(d => {
+        const row = { ...d.originalRow };
+        row.label = d.labels.join(';');
+        return row;
+      }));
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -192,5 +557,7 @@
       document.body.removeChild(link);
     }
   </script>
+
 </body>
+
 </html>
