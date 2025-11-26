@@ -137,7 +137,7 @@ def autolabel():
             "- 'Highway': Highway, motorway, freeway\n\n"
             "- 'Rough road': On the road named 'East Avenue T'"
             "- 'Not Rough road': On the road named 'Pearblossom Highway'"
-            "- 'Roundabout': At the road type of traffic circle or roundabout (within 50m)"
+            "- 'Roundabout': At the road type of traffic circle or roundabout (within 50m) or road name concatins 'circle'/'サークル'"
             "Output Format:\n"
             "Return ONLY a valid JSON array. Do not include any markdown formatting or explanation.\n"
             "Example: [{\"id\": 1, \"labels\": [\"Urban area\"]}]\n\n"
