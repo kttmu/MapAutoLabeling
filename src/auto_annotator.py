@@ -25,16 +25,11 @@ else:
     print(f"Warning: {API_KEY_PATH} not found. Groq API features will not work.")
 
 openai.api_base = "https://api.groq.com/openai/v1"
-MODEL_NAME = "llama3-70b-8192"
 MODEL_NAME = "llama-3.1-8b-instant"
 
 # Initialize new OpenAI client (compatible with openai>=1.0.0)
 # Set environment variables to configure the client properly
-os.environ["OPENAI_API_KEY"] = openai.api_key
 os.environ["GROQ_API_KEY"] = openai.api_key
-os.environ["OPENAI_API_BASE"] = openai.api_base
-#client = OpenAI()
-
 
 client = Groq(
     # This is the default and can be omitted
