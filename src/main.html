@@ -173,6 +173,11 @@
 
       <div class="control-group">
         <label>Actions</label>
+        <label>Model Selection</label>
+        <select id="modelSelect">
+          <option value="llama-3.1-8b-instant">Fast (Llama 3.1 8B)</option>
+          <option value="llama-3.1-70b-versatile">Accurate (Llama 3.1 70B)</option>
+        </select>
         <button onclick="autoLabel()">Auto Labeling (Groq)</button>
         <button class="secondary" onclick="exportCSV()">Export CSV</button>
       </div>
@@ -208,6 +213,10 @@
           <ul id="ruleList" style="list-style: none; padding: 0;"></ul>
         </div>
         <button onclick="applyRules()">Apply Rules</button>
+        <div style="display:flex; gap:5px; margin-top:5px;">
+          <button class="secondary" onclick="saveRules()">Save Rules</button>
+          <button class="secondary" onclick="loadRules()">Load Rules</button>
+        </div>
       </div>
 
       <h3>Markers</h3>
@@ -226,7 +235,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
   <script>
     // --- Map Initialization ---
-    const map = L.map('map').setView([35.6812, 139.7671], 13);
+    // Enable Canvas rendering for better performance with many markers
+    const map = L.map('map', { preferCanvas: true }).setView([35.6812, 139.7671], 13);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
@@ -236,6 +246,8 @@
     let markerData = [];
     let rules = [];
     let csvHeaders = [];
+    let latColName = 'latitude';
+    let lngColName = 'longitude';
 
     // --- Event Listeners ---
     document.getElementById('csvInput').addEventListener('change', function (e) {
@@ -254,17 +266,17 @@
 
     // --- Data Loading ---
     function loadTestData() {
-      const csv = `id,latitude,longitude,speed,rpm
-1,35.681236,139.767125,40,2000
-2,35.682236,139.768125,65,3000
-3,35.683236,139.769125,55,2500
-4,35.684236,139.770125,70,3500
-5,35.685236,139.771125,30,1500
-6,35.686236,139.772125,80,4000
-7,35.687236,139.773125,45,2200
-8,35.688236,139.774125,60,2800
-9,35.689236,139.775125,20,1000
-10,35.690236,139.776125,90,4500`;
+      const csv = `id,latitude,longitude,speed,rpm,altitude,time
+1,35.681236,139.767125,40,2000,10,0
+2,35.682236,139.768125,65,3000,12,10
+3,35.683236,139.769125,55,2500,15,20
+4,35.684236,139.770125,70,3500,25,30
+5,35.685236,139.771125,30,1500,35,40
+6,35.686236,139.772125,80,4000,36,50
+7,35.687236,139.773125,45,2200,37,60
+8,35.688236,139.774125,60,2800,38,70
+9,35.689236,139.775125,20,1000,30,80
+10,35.690236,139.776125,90,4500,20,90`;
 
       Papa.parse(csv, {
         header: true,
@@ -279,19 +291,60 @@
       csvHeaders = results.meta.fields || [];
       updateColumnSelect();
 
+      // Detect columns
+      const latCol = csvHeaders.find(h => h.toLowerCase().includes('lat')) || 'latitude';
+      const lngCol = csvHeaders.find(h => h.toLowerCase().includes('lon') || h.toLowerCase().includes('lng')) || 'longitude';
+      const altCol = csvHeaders.find(h => h.toLowerCase().includes('alt') || h.toLowerCase().includes('ele')) || 'altitude';
+      const timeCol = csvHeaders.find(h => h.toLowerCase().includes('time'));
+
+      latColName = latCol;
+      lngColName = lngCol;
+
       originalData = results.data.map((row, idx) => {
         const id = row.id || idx + 1;
-        const lat = parseFloat(row.latitude);
-        const lng = parseFloat(row.longitude);
+        const lat = parseFloat(row[latCol]);
+        const lng = parseFloat(row[lngCol]);
+        const alt = altCol ? parseFloat(row[altCol]) : null;
+        const time = timeCol ? parseFloat(row[timeCol]) : null;
         const labels = row.label ? row.label.split(';').map(l => l.trim()).filter(l => l) : [];
-        return { ...row, id, lat, lng, labels, originalRow: row };
+        return { ...row, id, lat, lng, alt, time, labels, originalRow: row };
       }).filter(d => !isNaN(d.lat) && !isNaN(d.lng));
+
+      // Calculate Slope
+      if (altCol) {
+        calculateSlopes();
+      }
 
       if (originalData.length > 0) {
         map.setView([originalData[0].lat, originalData[0].lng], 13);
       }
 
       applyThinning();
+    }
+
+    function calculateSlopes() {
+      for (let i = 1; i < originalData.length; i++) {
+        const p1 = originalData[i - 1];
+        const p2 = originalData[i];
+
+        if (p1.alt !== null && p2.alt !== null) {
+          const dist = haversine(p1.lat, p1.lng, p2.lat, p2.lng);
+          const altDiff = p2.alt - p1.alt;
+
+          // Avoid division by zero or noise for very small distances
+          if (dist > 5) {
+            const slope = (altDiff / dist) * 100; // Percentage
+            p2.slope = slope;
+
+            // Add label if slope >= 5% (absolute value)
+            if (Math.abs(slope) >= 5) {
+              if (!p2.labels.includes("Slope")) {
+                p2.labels.push("Slope");
+              }
+            }
+          }
+        }
+      }
     }
 
     function updateColumnSelect() {
@@ -319,6 +372,67 @@
       return R * c;
     }
 
+    // Perpendicular distance from point p to line segment (p1, p2)
+    function perpendicularDistance(p, p1, p2) {
+      let x = p.lng, y = p.lat;
+      let x1 = p1.lng, y1 = p1.lat;
+      let x2 = p2.lng, y2 = p2.lat;
+
+      let A = x - x1;
+      let B = y - y1;
+      let C = x2 - x1;
+      let D = y2 - y1;
+
+      let dot = A * C + B * D;
+      let len_sq = C * C + D * D;
+      let param = -1;
+      if (len_sq !== 0) //in case of 0 length line
+        param = dot / len_sq;
+
+      let xx, yy;
+
+      if (param < 0) {
+        xx = x1;
+        yy = y1;
+      }
+      else if (param > 1) {
+        xx = x2;
+        yy = y2;
+      }
+      else {
+        xx = x1 + param * C;
+        yy = y1 + param * D;
+      }
+
+      // Convert back to meters roughly for epsilon
+      return haversine(y, x, yy, xx);
+    }
+
+    function douglasPeucker(points, epsilon) {
+      if (points.length < 3) return points;
+
+      let dmax = 0;
+      let index = 0;
+      const end = points.length - 1;
+
+      for (let i = 1; i < end; i++) {
+        const d = perpendicularDistance(points[i], points[0], points[end]);
+        if (d > dmax) {
+          index = i;
+          dmax = d;
+        }
+      }
+
+      if (dmax > epsilon) {
+        const recResults1 = douglasPeucker(points.slice(0, index + 1), epsilon);
+        const recResults2 = douglasPeucker(points.slice(index, end + 1), epsilon);
+
+        return recResults1.slice(0, recResults1.length - 1).concat(recResults2);
+      } else {
+        return [points[0], points[end]];
+      }
+    }
+
     function applyThinning() {
       const distThresh = parseFloat(document.getElementById('thinDistance').value) || 0;
       const rate = parseInt(document.getElementById('thinRate').value) || 1;
@@ -329,19 +443,55 @@
       });
       markerData = [];
 
-      let lastPoint = null;
-      const thinned = [];
+      let thinned = [];
 
-      originalData.forEach((d, i) => {
-        if ((i % rate) !== 0) return;
+      // Strategy: Split data into chunks where labels are identical
+      // This ensures we preserve label transitions (Label Persistence)
+      let chunks = [];
+      if (originalData.length > 0) {
+        let currentChunk = [originalData[0]];
+        for (let i = 1; i < originalData.length; i++) {
+          const prev = originalData[i - 1];
+          const curr = originalData[i];
 
-        if (distThresh > 0 && lastPoint) {
-          const dist = haversine(lastPoint.lat, lastPoint.lng, d.lat, d.lng);
-          if (dist < distThresh) return;
+          // Compare labels
+          const prevLabels = prev.labels.slice().sort().join(';');
+          const currLabels = curr.labels.slice().sort().join(';');
+
+          if (prevLabels === currLabels) {
+            currentChunk.push(curr);
+          } else {
+            chunks.push(currentChunk);
+            currentChunk = [curr];
+          }
+        }
+        chunks.push(currentChunk);
+      }
+
+      // Apply thinning to each chunk
+      chunks.forEach(chunk => {
+        let chunkResult = [];
+
+        // 1. Simple Rate Thinning first (if requested)
+        let rateThinned = chunk.filter((d, i) => (i % rate) === 0);
+        // Always keep the last point of the chunk if it wasn't picked by rate
+        if (chunk.length > 0 && rateThinned[rateThinned.length - 1] !== chunk[chunk.length - 1]) {
+          rateThinned.push(chunk[chunk.length - 1]);
         }
 
-        thinned.push(d);
-        lastPoint = d;
+        // 2. Douglas-Peucker (if distance > 0)
+        if (distThresh > 0 && rateThinned.length > 2) {
+          chunkResult = douglasPeucker(rateThinned, distThresh);
+        } else {
+          chunkResult = rateThinned;
+        }
+
+        thinned = thinned.concat(chunkResult);
+      });
+
+      // Remove duplicates that might occur at chunk boundaries
+      thinned = thinned.filter((item, pos, ary) => {
+        return !pos || item !== ary[pos - 1];
       });
 
       thinned.forEach(d => addMarker(d));
@@ -352,6 +502,7 @@
 
     // --- Marker Logic ---
     function getColorByLabel(labels) {
+      if (labels.includes("Slope")) return "purple";
       if (labels.includes("Urban area")) return "blue";
       if (labels.includes("Intersection")) return "orange";
       if (labels.includes("Bridge")) return "green";
@@ -383,10 +534,9 @@
 
     function getPopupContent(d) {
       let extraInfo = '';
-      for (const [key, val] of Object.entries(d.originalRow)) {
-        if (!['latitude', 'longitude', 'id', 'label'].includes(key)) {
-          extraInfo += `<div><strong>${key}:</strong> ${val}</div>`;
-        }
+
+      if (d.slope !== undefined) {
+        extraInfo += `<div><strong>Calculated Slope:</strong> ${d.slope.toFixed(2)}%</div>`;
       }
 
       return `
@@ -469,7 +619,14 @@
     function applyRules() {
       markerData.forEach(d => {
         rules.forEach(r => {
-          const val = d.originalRow[r.col];
+          // Special handling for calculated properties not in originalRow
+          let val;
+          if (r.col === 'Slope (Calculated)') {
+            val = d.slope || 0;
+          } else {
+            val = d.originalRow[r.col];
+          }
+
           let match = false;
 
           const numVal = parseFloat(val);
@@ -499,13 +656,60 @@
       updateMarkerList();
     }
 
+    // --- Rule Save/Load ---
+    function saveRules() {
+      const data = {
+        rules: rules,
+        config: {
+          latCol: latColName,
+          lngCol: lngColName
+        }
+      };
+      const json = JSON.stringify(data, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", "labeling_rules.json");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    function loadRules() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      input.onchange = e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = event => {
+          try {
+            const data = JSON.parse(event.target.result);
+            if (data.rules) {
+              rules = data.rules;
+              renderRules();
+              alert("Rules loaded successfully!");
+            }
+          } catch (err) {
+            alert("Error parsing JSON: " + err.message);
+          }
+        };
+        reader.readAsText(file);
+      };
+      input.click();
+    }
+
     // --- Auto Labeling ---
     async function autoLabel() {
       if (markerData.length === 0) return;
 
       document.getElementById('loadingOverlay').style.display = 'flex';
 
-      const CHUNK_SIZE = 50; // Smaller chunk size for safety
+      const selectedModel = document.getElementById('modelSelect').value;
+
+      const CHUNK_SIZE = 15; // Reduced chunk size to avoid token limits
       const chunks = [];
       for (let i = 0; i < markerData.length; i += CHUNK_SIZE) {
         chunks.push(markerData.slice(i, i + CHUNK_SIZE));
@@ -516,7 +720,10 @@
           const response = await fetch("http://localhost:5000/autolabel", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(chunk.map(d => ({ lat: d.lat, lng: d.lng })))
+            body: JSON.stringify({
+              points: chunk.map(d => ({ lat: d.lat, lng: d.lng })),
+              model: selectedModel
+            })
           });
 
           if (!response.ok) throw new Error("API Error");
@@ -545,6 +752,8 @@
       const csv = Papa.unparse(markerData.map(d => {
         const row = { ...d.originalRow };
         row.label = d.labels.join(';');
+        // Add slope with explicit unit in header, ensure it exists for all rows
+        row['slope [%]'] = (d.slope !== undefined) ? d.slope.toFixed(2) : "";
         return row;
       }));
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

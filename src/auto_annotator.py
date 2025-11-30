@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 import openai
 from openai import OpenAI
 from flask_cors import CORS
@@ -9,6 +9,10 @@ import json
 import re
 from typing import List, Dict, Any
 from groq import Groq
+import concurrent.futures
+import webbrowser
+import threading
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -25,7 +29,8 @@ else:
     print(f"Warning: {API_KEY_PATH} not found. Groq API features will not work.")
 
 openai.api_base = "https://api.groq.com/openai/v1"
-MODEL_NAME = "llama-3.1-8b-instant"
+# Default model, can be overridden by request
+DEFAULT_MODEL_NAME = "llama-3.1-8b-instant"
 
 # Initialize new OpenAI client (compatible with openai>=1.0.0)
 # Set environment variables to configure the client properly
@@ -89,30 +94,45 @@ def extract_json_from_text(text: str) -> List[Dict[str, Any]]:
         print(f"JSON extraction error: {e}")
         return []
 
+@app.route('/')
+def index():
+    """Serve the main HTML file."""
+    return send_from_directory(BASE_DIR, 'main.html')
+
 @app.route('/autolabel', methods=['POST'])
 def autolabel():
     """
     Endpoint to automatically label geographic points using Groq API.
     """
     try:
-        points = request.get_json()
+        data = request.get_json()
+        
+        # Handle both list (legacy) and dict (new) input formats
+        if isinstance(data, list):
+            points = data
+            model_name = DEFAULT_MODEL_NAME
+        else:
+            points = data.get("points", [])
+            model_name = data.get("model", DEFAULT_MODEL_NAME)
+
         if not points:
             return jsonify([])
 
-        labeled = []
+        labeled = [None] * len(points)
 
-        for i, point in enumerate(points):
+        # Parallel Geocoding
+        def process_point(i, point):
             lat, lng = point.get("lat"), point.get("lng")
             if lat is None or lng is None:
-                continue
-
+                return None
+            
             geo_info = reverse_geocode(lat, lng)
             address = geo_info.get("display_name", "Unknown")
             road = geo_info.get("address", {}).get("road", "")
             category = geo_info.get("category", "")
             type_ = geo_info.get("type", "")
 
-            labeled.append({
+            return {
                 "id": i + 1,
                 "lat": lat,
                 "lng": lng,
@@ -121,7 +141,20 @@ def autolabel():
                 "category": category,
                 "type": type_,
                 "labels": []
-            })
+            }
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_index = {executor.submit(process_point, i, p): i for i, p in enumerate(points)}
+            for future in concurrent.futures.as_completed(future_to_index):
+                i = future_to_index[future]
+                try:
+                    result = future.result()
+                    labeled[i] = result
+                except Exception as exc:
+                    print(f'Point {i} generated an exception: {exc}')
+        
+        # Filter out Nones (failed points)
+        labeled = [l for l in labeled if l is not None]
 
         if not labeled:
             return jsonify([])
@@ -129,17 +162,17 @@ def autolabel():
         # Prompt Construction
         prompt = (
             "You are an expert in geographic data labeling based on OpenStreetMap.\n"
-            "Analyze the following location data and assign labels based on their characteristics.\n"
+            "Analyze each location data entry and assign labels based on the following rules:\n"
             "Labels to assign:\n"
-            "- 'Urban area': Dense residential/commercial area\n"
-            "- 'Intersection': Near an intersection (within 50m)\n"
-            "- 'Bridge': On a bridge or road name contains 'bridge'/'橋'\n"
-            "- 'Highway': Highway, motorway, freeway\n\n"
-            "- 'Rough road': On the road named 'East Avenue T'"
-            "- 'Not Rough road': On the road named 'Pearblossom Highway'"
-            "- 'Roundabout': At the road type of traffic circle or roundabout (within 50m) or road name concatins 'circle'/'サークル'"
+            "- 'Urban area': The location is in a dense residential or commercial area.\n"
+            "- 'Intersection': The location is within 50m of an intersection.\n"
+            "- 'Bridge': The location is on a bridge or the road name contains 'bridge' or '橋'.\n"
+            "- 'Highway': The location is on a highway, motorway, or freeway.\n"
+            "- 'Rough road': The location is on a road named 'East Avenue T'.\n"
+            "- 'Not Rough road': The location is on a road named 'Pearblossom Highway'.\n"
+            "- 'Roundabout': The location is within 50m of a roundabout/traffic circle or the road name contains 'circle' or 'サークル'.\n\n"
             "Output Format:\n"
-            "Return ONLY a valid JSON array. Do not include any markdown formatting or explanation.\n"
+            "Return ONLY a valid JSON array. Do not include any markdown formatting, additional text, or explanation.\n"
             "Example: [{\"id\": 1, \"labels\": [\"Urban area\"]}]\n\n"
             "Data:\n"
         )
@@ -155,9 +188,11 @@ def autolabel():
              print("Groq API key missing, skipping LLM labeling.")
              return jsonify(labeled)
 
+        print(f"Using Groq Model: {model_name}")
+
         # Use new client API for chat completions
         response = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=model_name,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant that outputs only JSON."},
                 {"role": "user", "content": prompt}
@@ -188,5 +223,12 @@ def autolabel():
         print(f"Autolabel error: {e}")
         return jsonify({"error": str(e)}), 500
 
+def open_browser():
+    """Open the browser after a short delay to ensure server is running."""
+    time.sleep(1.5)
+    webbrowser.open("http://localhost:5000")
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Start browser in a separate thread
+    threading.Thread(target=open_browser).start()
+    app.run(debug=True, port=5000, use_reloader=False)
